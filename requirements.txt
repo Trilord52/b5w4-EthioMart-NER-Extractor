@@ -1,0 +1,5 @@
+telethon
+python-dotenv
+pandas
+openpyxl
+unicodedata2 # for some environments, for Amharic normalization 

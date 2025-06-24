@@ -6,7 +6,7 @@ import asyncio
 from dotenv import load_dotenv
 import pandas as pd
 from telethon import TelegramClient, errors
-from typing import Optional
+from typing import List, Optional
 
 # ------------------- CONFIGURATION -------------------
 load_dotenv('.env')
@@ -30,12 +30,18 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ------------------- UTILITY FUNCTIONS -------------------
-def get_channels(xlsx_path: str, max_channels: int) -> list:
+def get_channels(xlsx_path: str, max_channels: int) -> List[str]:
+    """
+    Read channel usernames from an Excel file.
+    Returns a list of channel usernames (without '@'), limited to max_channels.
+    """
     df = pd.read_excel(xlsx_path, header=None)
     return [str(c).strip().lstrip('@') for c in df[0].dropna().unique()][:max_channels]
 
-async def download_media_with_retry(client, media, path, retries=RETRY_LIMIT):
+async def download_media_with_retry(client: TelegramClient, media, path: str, retries: int = RETRY_LIMIT) -> bool:
+    """
+    Download media with retry logic. Returns True if successful, False otherwise.
+    """
     for attempt in range(retries):
         try:
             await client.download_media(media, path)
@@ -45,53 +51,85 @@ async def download_media_with_retry(client, media, path, retries=RETRY_LIMIT):
             time.sleep(RETRY_BACKOFF * (attempt + 1))
     return False
 
-async def scrape_channel(client, channel_username: str, writer, media_dir: str):
-    """Scrape messages from a single Telegram channel with error handling and retry."""
-    for attempt in range(RETRY_LIMIT):
-        try:
-            entity = await client.get_entity(channel_username)
-            channel_title = entity.title if hasattr(entity, 'title') else channel_username
-            count = 0
-            async for message in client.iter_messages(entity):
-                if count >= MAX_MESSAGES:
-                    break
-                media_path = None
-                if message.media and hasattr(message.media, 'photo'):
-                    filename = f"{channel_username}_{message.id}.jpg"
-                    media_path = os.path.join(media_dir, filename)
-                    success = await download_media_with_retry(client, message.media, media_path)
-                    if not success:
-                        media_path = None
-                writer.writerow([
-                    channel_title,
-                    '@' + channel_username,
-                    message.id,
-                    message.message,
-                    message.date,
-                    media_path
-                ])
-                count += 1
-            logging.info(f"Scraped {count} messages from @{channel_username}")
-            return
-        except (errors.FloodWaitError, errors.RPCError, Exception) as e:
-            logging.error(f"Error scraping @{channel_username} (attempt {attempt+1}): {e}")
-            time.sleep(RETRY_BACKOFF * (attempt + 1))
-    logging.error(f"Failed to scrape @{channel_username} after {RETRY_LIMIT} attempts.")
+async def fetch_channel_messages(client: TelegramClient, channel_username: str, max_messages: int) -> List[dict]:
+    """
+    Fetch messages and metadata from a Telegram channel.
+    Returns a list of message dicts.
+    """
+    messages = []
+    try:
+        entity = await client.get_entity(channel_username)
+        count = 0
+        async for message in client.iter_messages(entity):
+            if count >= max_messages:
+                break
+            messages.append({
+                'id': message.id,
+                'text': message.message,
+                'date': message.date,
+                'media': message.media,
+                'channel_title': entity.title if hasattr(entity, 'title') else channel_username,
+                'channel_username': channel_username
+            })
+            count += 1
+        logging.info(f"Fetched {count} messages from @{channel_username}")
+    except Exception as e:
+        logging.error(f"Error fetching messages from @{channel_username}: {e}")
+    return messages
 
-async def main():
-    os.makedirs(MEDIA_DIR, exist_ok=True)
-    channels = get_channels(CHANNELS_XLSX, MAX_CHANNELS)
-    await client.start()
-    with open(CSV_PATH, 'w', newline='', encoding='utf-8') as file:
+async def process_and_save_messages(messages: List[dict], writer, client: TelegramClient, media_dir: str):
+    """
+    Process messages: download media, write to CSV with metadata.
+    """
+    for msg in messages:
+        media_path = None
+        if msg['media'] and hasattr(msg['media'], 'photo'):
+            filename = f"{msg['channel_username']}_{msg['id']}.jpg"
+            media_path = os.path.join(media_dir, filename)
+            success = await download_media_with_retry(client, msg['media'], media_path)
+            if not success:
+                media_path = None
+        writer.writerow([
+            msg['channel_title'],
+            '@' + msg['channel_username'],
+            msg['id'],
+            msg['text'],
+            msg['date'],
+            media_path
+        ])
+
+async def scrape_all_channels(client: TelegramClient, channels: List[str], csv_path: str, media_dir: str):
+    """
+    Orchestrate scraping for all channels, handling retries and logging.
+    """
+    os.makedirs(media_dir, exist_ok=True)
+    with open(csv_path, 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(['Channel Title', 'Channel Username', 'ID', 'Message', 'Date', 'Media Path'])
         for channel in channels:
-            print(f"Scraping @{channel} ...")
-            await scrape_channel(client, channel, writer, MEDIA_DIR)
-            print(f"Finished @{channel}")
+            for attempt in range(RETRY_LIMIT):
+                try:
+                    print(f"Scraping @{channel} (attempt {attempt+1}) ...")
+                    messages = await fetch_channel_messages(client, channel, MAX_MESSAGES)
+                    await process_and_save_messages(messages, writer, client, media_dir)
+                    print(f"Finished @{channel}")
+                    break
+                except (errors.FloodWaitError, errors.RPCError, Exception) as e:
+                    logging.error(f"Error scraping @{channel} (attempt {attempt+1}): {e}")
+                    time.sleep(RETRY_BACKOFF * (attempt + 1))
+            else:
+                logging.error(f"Failed to scrape @{channel} after {RETRY_LIMIT} attempts.")
 
-# ------------------- MAIN ENTRY -------------------
+async def main():
+    """
+    Main entry point: start client, get channels, and scrape all.
+    """
+    channels = get_channels(CHANNELS_XLSX, MAX_CHANNELS)
+    await client.start()
+    await scrape_all_channels(client, channels, CSV_PATH, MEDIA_DIR)
+
 if __name__ == '__main__':
+    # Initialize Telegram client
     client = TelegramClient('scraping_session', API_ID, API_HASH)
     with client:
         client.loop.run_until_complete(main()) 

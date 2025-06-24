@@ -4,7 +4,9 @@ import re
 import unicodedata
 
 def normalize_amharic(text):
-    """Normalize Amharic text: remove diacritics, normalize similar characters."""
+    """
+    Normalize Amharic text by removing diacritics and standardizing common character variants.
+    """
     # Remove diacritics (combining marks)
     text = ''.join(c for c in unicodedata.normalize('NFD', str(text)) if unicodedata.category(c) != 'Mn')
     # Normalize common Amharic character variants (add more as needed)
@@ -14,7 +16,9 @@ def normalize_amharic(text):
     return text
 
 def clean_message(text):
-    """Remove URLs, emojis, and non-Amharic/English noise from text."""
+    """
+    Remove URLs, emojis, and non-Amharic/English noise from text.
+    """
     # Remove URLs
     text = re.sub(r'http\S+|www\.\S+', '', str(text))
     # Remove emojis and non-text symbols
@@ -26,7 +30,14 @@ def clean_message(text):
     return text
 
 def preprocess_telegram_data(input_csv, output_dir):
-    """Preprocess Telegram data: normalize, clean, deduplicate, and structure."""
+    """
+    Preprocess Telegram data: normalize, clean, deduplicate, and structure.
+    - Removes duplicates
+    - Normalizes Amharic text
+    - Cleans messages (removes URLs, emojis, noise)
+    - Filters empty/irrelevant messages
+    - Saves cleaned data to output_dir
+    """
     os.makedirs(output_dir, exist_ok=True)
     df = pd.read_csv(input_csv)
     # Drop duplicates based on message content
@@ -35,7 +46,7 @@ def preprocess_telegram_data(input_csv, output_dir):
     df['Message'] = df['Message'].apply(normalize_amharic).apply(clean_message)
     # Remove empty or irrelevant messages
     df = df[df['Message'].str.strip().astype(bool)]
-    # Separate metadata and message content
+    # Separate metadata and message content (for future use)
     meta_cols = [col for col in df.columns if col != 'Message']
     df_meta = df[meta_cols]
     df_msg = df[['Message']]
@@ -45,4 +56,5 @@ def preprocess_telegram_data(input_csv, output_dir):
     print(f"Preprocessed data saved to {output_csv}")
 
 if __name__ == '__main__':
+    # Example usage: preprocess the raw Telegram data
     preprocess_telegram_data('data/raw/telegram_data_combined.csv', 'data/processed') 

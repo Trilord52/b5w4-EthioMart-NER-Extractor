@@ -1,13 +1,13 @@
 telethon
 python-dotenv
-pandas
+pandas  # also for analytics/scorecard
 openpyxl
 unicodedata2 # for some environments, for Amharic normalization 
 transformers
 datasets
 seqeval
-numpy 
+numpy  # also for analytics/scorecard
 shap
 lime
-matplotlib
-seaborn 
+matplotlib  # for scorecard visualization
+seaborn    # for scorecard visualization 
